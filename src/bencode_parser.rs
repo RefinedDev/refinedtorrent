@@ -1,11 +1,11 @@
 use anyhow::{Result, anyhow};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 pub enum BencodeType<'a> {
     String(&'a[u8]),
     Integer(i64),
     List(Vec<BencodeType<'a>>),
-    Dict(HashMap<String, BencodeType<'a>>),
+    Dict(BTreeMap<String, BencodeType<'a>>),
 }
 
 impl<'a> std::fmt::Display for BencodeType<'a> {
@@ -113,8 +113,8 @@ fn decode_list<'a>(mut rest: &'a [u8]) -> Result<(Vec<BencodeType<'a>>, Option<&
 // Therefore I am taking the liberty of checking and converting byte strings to dict keys
 fn decode_dict<'a>(
     mut rest: &'a [u8],
-) -> Result<(HashMap<String, BencodeType<'a>>, Option<&'a [u8]>)> {
-    let mut dict: HashMap<String, BencodeType> = HashMap::new();
+) -> Result<(BTreeMap<String, BencodeType<'a>>, Option<&'a [u8]>)> {
+    let mut dict: BTreeMap<String, BencodeType> = BTreeMap::new();
     let mut key: Option<String> = None;
 
     while !rest.is_empty() {
