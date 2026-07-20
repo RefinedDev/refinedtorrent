@@ -1,5 +1,41 @@
 use anyhow::{Result, anyhow};
-use serde_json::{Map, Value};
+use std::collections::HashMap;
+
+pub enum BencodeType<'a> {
+    String(&'a[u8]),
+    Integer(i64),
+    List(Vec<BencodeType<'a>>),
+    Dict(HashMap<String, BencodeType<'a>>),
+}
+
+impl<'a> std::fmt::Display for BencodeType<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BencodeType::String(arr) => write!(f, "{}", String::from_utf8_lossy(arr)),
+            BencodeType::Integer(int) => write!(f, "{}", int),
+            BencodeType::List(list) => {
+                write!(f, "[")?;
+                for (i, item) in list.iter().enumerate() {
+                    if i != 0 {
+                        write!(f, ",")?;
+                    }
+                    write!(f, "{item}")?; // Recurses if nested
+                }
+                write!(f, "]")
+            }
+            BencodeType::Dict(dict) => {
+                write!(f, "{{")?;
+                for (i, (k, v)) in dict.iter().enumerate() {
+                    if i != 0 {
+                        write!(f, ",")?;
+                    }
+                    write!(f, "{}:{}", k, v)?; // Recurses if nested
+                }
+                write!(f, "}}")
+            }
+        }
+    }
+}
 
 // Strings are of the form "<len>:<string>"
 // This returns the colon index and length of string respectively
@@ -32,9 +68,9 @@ fn decode_number(encoded: &[u8]) -> Result<(i64, usize)> {
 }
 
 // Lists are of the form "l<item1><item2>...<itemN>e"
-// This returns the decoded list and an optional string which is only Some() during recursion (it is the rest string)
-fn decode_list(mut rest: &[u8]) -> Result<(Vec<Value>, Option<&[u8]>)> {
-    let mut list: Vec<Value> = Vec::new();
+// This returns the decoded list and an optional string which is only Some() during recursion (it is the rest of the rest string after decoding the nested list)
+fn decode_list<'a>(mut rest: &'a [u8]) -> Result<(Vec<BencodeType<'a>>, Option<&'a [u8]>)> {
+    let mut list: Vec<BencodeType> = Vec::new();
     while !rest.is_empty() {
         let first_char = rest
             .get(0)
@@ -44,23 +80,23 @@ fn decode_list(mut rest: &[u8]) -> Result<(Vec<Value>, Option<&[u8]>)> {
             let (colon_idx, strlen) = decode_str(rest)?;
             let string = &rest[colon_idx + 1..colon_idx + 1 + strlen];
             rest = &rest[colon_idx + strlen + 1..];
-            list.push(string.into());
+            list.push(BencodeType::String(string));
         } else if first_char == &b'i' {
             // number
             let (number, len) = decode_number(rest)?;
             rest = &rest[len + 2..];
-            list.push(number.into());
+            list.push(BencodeType::Integer(number));
         } else if first_char == &b'l' {
             // list
             rest = rest.strip_prefix(b"l").unwrap();
             let recursed = decode_list(rest)?;
-            list.push(recursed.0.into());
+            list.push(BencodeType::List(recursed.0));
             rest = recursed.1.unwrap()
         } else if first_char == &b'd' {
             // dict
             rest = rest.strip_prefix(b"d").unwrap();
             let recursed = decode_dict(rest)?;
-            list.push(recursed.0.into());
+            list.push(BencodeType::Dict(recursed.0));
             rest = recursed.1.unwrap()
         } else if first_char == &b'e' {
             // only gonna happen during recursion or if the bencode is faulty
@@ -72,13 +108,15 @@ fn decode_list(mut rest: &[u8]) -> Result<(Vec<Value>, Option<&[u8]>)> {
 }
 
 // Dictionaries are of the form d<item1><key1><item2><key2>....<itemN><keyN>e
-// This returns the decoded dictionary and an optional string which is only Some during recursion (it is the rest string)
+// This returns the decoded dictionary and an optional string which is only Some during recursion (it is the rest of the rest string after decoding the nested dictionary)
 // The official BitTorrent specification says that Dict keys are ALWAYS valid utf-8 byte strings
 // Therefore I am taking the liberty of checking and converting byte strings to dict keys
-fn decode_dict(mut rest: &[u8]) -> Result<(Map<String, Value>, Option<&[u8]>)> {
-    let mut dict: Map<String, Value> = Map::new();
+fn decode_dict<'a>(
+    mut rest: &'a [u8],
+) -> Result<(HashMap<String, BencodeType<'a>>, Option<&'a [u8]>)> {
+    let mut dict: HashMap<String, BencodeType> = HashMap::new();
     let mut key: Option<String> = None;
-   
+
     while !rest.is_empty() {
         let first_char = rest
             .get(0)
@@ -92,24 +130,24 @@ fn decode_dict(mut rest: &[u8]) -> Result<(Map<String, Value>, Option<&[u8]>)> {
             if key.is_none() {
                 key = Some(String::from_utf8(string.to_vec()).unwrap())
             } else {
-                dict.insert(key.take().unwrap(), string.into());
+                dict.insert(key.take().unwrap(), BencodeType::String(string));
             }
         } else if first_char == &b'i' {
             // number
             let (number, len) = decode_number(rest)?;
             rest = &rest[len + 2..];
-            dict.insert(key.take().unwrap(), number.into());
+            dict.insert(key.take().unwrap(), BencodeType::Integer(number));
         } else if first_char == &b'l' {
             // list
             rest = rest.strip_prefix(b"l").unwrap();
             let recursed = decode_list(rest)?;
-            dict.insert(key.take().unwrap(), recursed.0.into());
+            dict.insert(key.take().unwrap(), BencodeType::List(recursed.0));
             rest = recursed.1.unwrap()
         } else if first_char == &b'd' {
             // dict
             rest = rest.strip_prefix(b"d").unwrap();
             let recursed = decode_dict(rest)?;
-            dict.insert(key.take().unwrap(), recursed.0.into());
+            dict.insert(key.take().unwrap(), BencodeType::Dict(recursed.0));
             rest = recursed.1.unwrap()
         } else if first_char == &b'e' {
             // only gonna during recursion or if the bencode is faulty
@@ -121,7 +159,7 @@ fn decode_dict(mut rest: &[u8]) -> Result<(Map<String, Value>, Option<&[u8]>)> {
     Ok((dict, None))
 }
 
-pub fn decode_bencoded_value(encoded_value: &[u8]) -> Result<serde_json::Value> {
+pub fn decode_bencoded_value<'a>(encoded_value: &'a [u8]) -> Result<BencodeType<'a>> {
     let first_char = encoded_value
         .get(0)
         .ok_or_else(|| anyhow!("bencode string is empty!"))?;
@@ -129,10 +167,10 @@ pub fn decode_bencoded_value(encoded_value: &[u8]) -> Result<serde_json::Value> 
         // string
         let (colon_idx, strlen) = decode_str(&encoded_value)?;
         let string = &encoded_value[colon_idx + 1..colon_idx + 1 + strlen];
-        return Ok(string.into());
+        return Ok(BencodeType::String(string));
     } else if first_char == &b'i' {
         // number
-        return Ok(decode_number(&encoded_value)?.0.into());
+        return Ok(BencodeType::Integer(decode_number(&encoded_value)?.0));
     } else if first_char == &b'l' {
         // list
         let rest = encoded_value
@@ -144,7 +182,7 @@ pub fn decode_bencoded_value(encoded_value: &[u8]) -> Result<serde_json::Value> 
                     String::from_utf8_lossy(&encoded_value)
                 )
             })?;
-        return Ok(decode_list(rest)?.0.into());
+        return Ok(BencodeType::List(decode_list(rest)?.0));
     } else if first_char == &b'd' {
         // dictionary
         let rest = encoded_value
@@ -156,7 +194,7 @@ pub fn decode_bencoded_value(encoded_value: &[u8]) -> Result<serde_json::Value> 
                     String::from_utf8_lossy(&encoded_value)
                 )
             })?;
-        return Ok(decode_dict(rest)?.0.into());
+        return Ok(BencodeType::Dict(decode_dict(rest)?.0));
     } else {
         panic!(
             "Unhandled encoded value: {}",
