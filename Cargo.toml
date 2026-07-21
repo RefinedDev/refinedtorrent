@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+sha1 = "0.11.0"

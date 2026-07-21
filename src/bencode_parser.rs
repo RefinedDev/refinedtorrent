@@ -84,7 +84,7 @@ fn decode_list<'a>(mut rest: &'a [u8]) -> Result<(Vec<BencodeType<'a>>, Option<&
         } else if first_char == &b'i' {
             // number
             let (number, len) = decode_number(rest)?;
-            rest = &rest[len + 2..];
+            rest = &rest[len + 2..]; // +2 to account for i and e
             list.push(BencodeType::Integer(number));
         } else if first_char == &b'l' {
             // list
