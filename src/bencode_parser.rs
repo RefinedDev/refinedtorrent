@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use std::collections::BTreeMap;
 
+#[derive(Debug)]
 pub enum BencodeType<'a> {
     String(&'a[u8]),
     Integer(i64),
@@ -8,10 +9,38 @@ pub enum BencodeType<'a> {
     Dict(BTreeMap<String, BencodeType<'a>>),
 }
 
+impl<'a> BencodeType<'a> {
+    pub fn as_bytes(&self) -> Option<&'a[u8]> {
+        match self {
+            BencodeType::String(arr) => Some(*arr),
+            _ => None
+        }
+    }
+
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            BencodeType::Integer(int) => Some(*int),
+            _ => None
+        }
+    }
+    
+    pub fn as_dict(&self) -> Option<&BTreeMap<String, BencodeType<'a>>> {
+        match self {
+            BencodeType::Dict(tree) => Some(tree),
+            _ => None
+        }
+    }
+}
+
 impl<'a> std::fmt::Display for BencodeType<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BencodeType::String(arr) => write!(f, "{}", String::from_utf8_lossy(arr)),
+            BencodeType::String(arr) => {
+                match String::from_utf8(arr.to_vec()) {
+                    Ok(something) => write!(f, "{}", something),
+                    Err(_) => write!(f, "{:?}", arr)
+                }
+            },
             BencodeType::Integer(int) => write!(f, "{}", int),
             BencodeType::List(list) => {
                 write!(f, "[")?;
@@ -200,5 +229,38 @@ pub fn decode_bencoded_value<'a>(encoded_value: &'a [u8]) -> Result<BencodeType<
             "Unhandled encoded value: {}",
             String::from_utf8_lossy(&encoded_value)
         )
+    }
+}
+
+pub fn encode(value: &BencodeType, bencoded: &mut Vec<u8>, key: Option<&str>) {
+    if let Some(k) = key {
+        let len_colon_str = format!("{}:{}", k.len(), k);
+        bencoded.extend_from_slice(len_colon_str.as_bytes());
+    }
+    match value {
+        BencodeType::String(str_bytes) => {
+            bencoded.extend_from_slice(str_bytes.len().to_string().as_bytes());
+            bencoded.push(b':');
+            bencoded.extend_from_slice(*str_bytes);
+        }
+        BencodeType::Integer(int) => {
+            bencoded.push(b'i');
+            bencoded.extend_from_slice(int.to_string().as_bytes());
+            bencoded.push(b'e');
+        }
+        BencodeType::List(list) => {
+            bencoded.push(b'l');
+            for item in list.iter() {
+                encode(item, bencoded, None);
+            }
+            bencoded.push(b'e');
+        }
+        BencodeType::Dict(dict) => {
+            bencoded.push(b'd');
+            for (k, v) in dict.iter() {
+                encode(v, bencoded, Some(k));
+            }
+            bencoded.push(b'e');
+        }
     }
 }

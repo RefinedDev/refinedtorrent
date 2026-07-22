@@ -2,64 +2,70 @@ mod bencode_parser;
 #[cfg(test)]
 mod bencode_tests;
 use anyhow::Result;
-use sha1::{Digest, Sha1};
+use reqwest;
+use sha1::{Digest, Sha1, digest::array::ArrayN};
+use std::fmt::Write;
 
-use crate::bencode_parser::BencodeType;
+fn hash_bytes_to_percent_hex(hash: ArrayN<u8, 20>) -> Result<String> {
+    let mut encode = String::new();
+    for byte in hash {
+        write!(encode, "%{:02x}", byte)?;
+    }
+    Ok(encode)
+}
 
-fn encode(value: &BencodeType, bencoded: &mut Vec<u8>, key: Option<&str>) {
-    if let Some(k) = key {
-        let len_colon_str = format!("{}:{}", k.len(), k);
-        bencoded.extend_from_slice(len_colon_str.as_bytes());
+fn get_peer_ips(bytes: &[u8]) -> Result<Vec<String>> {
+    let end = bytes.len() / 6;
+    let mut ips = Vec::with_capacity(end);
+    for i in 0..end {
+        let slice = &bytes[6 * i..6 * (i + 1)];
+        let mut ip = slice[0..4]
+            .iter()
+            .map(|int| int.to_string())
+            .collect::<Vec<String>>()
+            .join(".");
+        let port = u16::from_be_bytes([slice[4], slice[5]]);
+        write!(ip, ":{}", port)?;
+        ips.push(ip);
     }
-    match value {
-        BencodeType::String(str_bytes) => {
-            bencoded.extend_from_slice(str_bytes.len().to_string().as_bytes());
-            bencoded.push(b':');
-            bencoded.extend_from_slice(*str_bytes);
-        }
-        BencodeType::Integer(int) => {
-            bencoded.push(b'i');
-            bencoded.extend_from_slice(int.to_string().as_bytes());
-            bencoded.push(b'e');
-        }
-        BencodeType::List(list) => {
-            bencoded.push(b'l');
-            for item in list.iter() {
-                encode(item, bencoded, None);
-            }
-            bencoded.push(b'e');
-        }
-        BencodeType::Dict(dict) => {
-            bencoded.push(b'd');
-            for (k, v) in dict.iter() {
-                encode(v, bencoded, Some(k));
-            }
-            bencoded.push(b'e');
-        }
-    }
+    Ok(ips)
 }
 
 fn main() -> Result<()> {
     let bytes = std::fs::read("sample.torrent")?;
     let decoded_value = bencode_parser::decode_bencoded_value(&bytes)?;
 
-    if let BencodeType::Dict(treemap) = decoded_value {
-        if let BencodeType::Dict(info) = &treemap["info"] {
-            let mut bencode = Vec::with_capacity(234);
-            bencode.push(b'd');
-            for (k, v) in info.iter() {
-                encode(v, &mut bencode, Some(k));
-            }
-            bencode.push(b'e');
-            let hash = Sha1::digest(bencode);
-            let mut hash_str = String::new();
-            for byte in hash {
-                hash_str.push_str(&format!("{:02x}", byte));
-            }
-            assert_eq!(hash_str, "d69f91e6b2ae4c542468d1073a71d4ea13879a7f");
-            
-        }
+    let treemap = decoded_value.as_dict().unwrap(); // Get the decoded value in a dictionary form
+    let info = treemap["info"].as_dict().unwrap(); // Get the info sub-dict
+    // Converting the info sub_dict back to bencode byte array
+    let mut info_bencode = Vec::with_capacity(234);
+    info_bencode.push(b'd');
+    for (k, v) in info.iter() {
+        bencode_parser::encode(v, &mut info_bencode, Some(k));
     }
+    info_bencode.push(b'e');
 
+    // "announce" is the torrent link
+    let mut url = String::from_utf8(treemap["announce"].as_bytes().unwrap().to_vec())?;
+    // Converting the bencode to hash and inserting in link
+    url.push_str(&format!(
+        "?info_hash={}",
+        hash_bytes_to_percent_hex(Sha1::digest(info_bencode))?
+    ));
+    // The rest of the parameters; Not adding the info_hash along with these because parse_with_params double encodes
+    let params = [
+        ("peer_id", "hellomynameisgamer12".to_string()),
+        ("port", 6881.to_string()),
+        ("uploaded", 0.to_string()),
+        ("downloaded", 0.to_string()),
+        ("left", info["length"].as_int().unwrap().to_string()),
+        ("compact", 1.to_string()),
+    ];
+    let url = reqwest::Url::parse_with_params(&url, &params)?;
+    let response = reqwest::blocking::get(url)?.bytes()?;
+    let decoded = bencode_parser::decode_bencoded_value(&response)?;
+    let decoded_dict = decoded.as_dict().unwrap();
+    let ips = get_peer_ips(decoded_dict["peers"].as_bytes().unwrap())?;
+    println!("{:?}", ips);
     Ok(())
 }
