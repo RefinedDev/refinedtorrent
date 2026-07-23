@@ -188,7 +188,7 @@ fn decode_dict<'a>(
     Ok((dict, None))
 }
 
-pub fn decode_bencoded_value<'a>(encoded_value: &'a [u8]) -> Result<BencodeType<'a>> {
+pub fn decode<'a>(encoded_value: &'a [u8]) -> Result<BencodeType<'a>> {
     let first_char = encoded_value
         .get(0)
         .ok_or_else(|| anyhow!("bencode string is empty!"))?;
