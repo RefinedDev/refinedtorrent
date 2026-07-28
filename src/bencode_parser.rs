@@ -3,31 +3,31 @@ use std::collections::BTreeMap;
 
 #[derive(Debug)]
 pub enum BencodeType<'a> {
-    String(&'a[u8]),
+    String(&'a [u8]),
     Integer(i64),
     List(Vec<BencodeType<'a>>),
     Dict(BTreeMap<String, BencodeType<'a>>),
 }
 
 impl<'a> BencodeType<'a> {
-    pub fn as_bytes(&self) -> Option<&'a[u8]> {
+    pub fn as_bytes(&self) -> Option<&'a [u8]> {
         match self {
             BencodeType::String(arr) => Some(*arr),
-            _ => None
+            _ => None,
         }
     }
 
     pub fn as_int(&self) -> Option<i64> {
         match self {
             BencodeType::Integer(int) => Some(*int),
-            _ => None
+            _ => None,
         }
     }
-    
+
     pub fn as_dict(&self) -> Option<&BTreeMap<String, BencodeType<'a>>> {
         match self {
             BencodeType::Dict(tree) => Some(tree),
-            _ => None
+            _ => None,
         }
     }
 }
@@ -35,11 +35,9 @@ impl<'a> BencodeType<'a> {
 impl<'a> std::fmt::Display for BencodeType<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BencodeType::String(arr) => {
-                match String::from_utf8(arr.to_vec()) {
-                    Ok(something) => write!(f, "{}", something),
-                    Err(_) => write!(f, "{:?}", arr)
-                }
+            BencodeType::String(arr) => match String::from_utf8(arr.to_vec()) {
+                Ok(something) => write!(f, "{}", something),
+                Err(_) => write!(f, "{:?}", arr),
             },
             BencodeType::Integer(int) => write!(f, "{}", int),
             BencodeType::List(list) => {

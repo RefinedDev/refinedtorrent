@@ -1,15 +1,15 @@
+mod bencode_parser;
 #[cfg(test)]
 mod bencode_tests;
-mod bencode_parser;
 
 use anyhow::Result;
 use reqwest;
 use sha1::{Digest, Sha1, digest::array::ArrayN};
-use tokio::sync::{Mutex};
 use std::fmt::Write;
-use tokio::net::TcpStream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 
 fn sha1_bytes_to_hex(hash: ArrayN<u8, 20>, percent: bool) -> Result<String> {
     let mut encode = String::new();
@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
 
     let treemap = decoded_value.as_dict().unwrap(); // Get the decoded value in a dictionary form
     let info = treemap["info"].as_dict().unwrap(); // Get the info sub-dict
-    
+
     // Converting the info sub_dict back to bencode byte array
     let mut info_bencode = Vec::with_capacity(234);
     info_bencode.push(b'd');
@@ -106,7 +106,8 @@ async fn main() -> Result<()> {
     let pieces_bytes = Arc::new(Mutex::new(Vec::with_capacity(torrent_pieces_hash.len())));
 
     let mut connections = Vec::with_capacity(ips.len());
-    { // TODO: IMPLEMENT MULTI-PEER
+    {
+        // TODO: IMPLEMENT MULTI-PEER
         let info_hash = Arc::clone(&info_bencode);
         let torrent_pieces_hash = Arc::clone(&torrent_pieces_hash);
         let pieces_hashes = Arc::clone(&pieces_hashes);
@@ -115,10 +116,10 @@ async fn main() -> Result<()> {
         let ip = ips[0].clone();
         let total_length = total_length.clone() as u32;
         let piece_length = piece_length.clone() as u32;
-        
+
         connections.push(tokio::spawn(async move {
             let mut stream = TcpStream::connect(ip).await.unwrap();
-            
+
             let mut h1 = [0u8; 68]; // To establish a connection we need to do a handshake
             h1[0] = 19;
             h1[1..20].copy_from_slice(b"BitTorrent protocol");
@@ -128,14 +129,18 @@ async fn main() -> Result<()> {
             stream.write_all(&h1).await.unwrap();
             let mut h2 = [0u8; 68]; // The peer returns something similar in return
             stream.read_exact(&mut h2).await.unwrap();
-            
+
             // Get 'bitfield' payload
-            let mut length_bytes = [0u8;4];
-            let mut message_id = [0u8;1];
+            let mut length_bytes = [0u8; 4];
+            let mut message_id = [0u8; 1];
             stream.read_exact(&mut length_bytes).await.unwrap();
             stream.read_exact(&mut message_id).await.unwrap(); // message_id for bitfield is 5
-            let mut bitfield_payload_bytes = vec![0u8; (u32::from_be_bytes(length_bytes) - 1) as usize]; // Message takes 1 length
-            stream.read_exact(&mut bitfield_payload_bytes).await.unwrap();
+            let mut bitfield_payload_bytes =
+                vec![0u8; (u32::from_be_bytes(length_bytes) - 1) as usize]; // Message takes 1 length
+            stream
+                .read_exact(&mut bitfield_payload_bytes)
+                .await
+                .unwrap();
 
             // Send 'interested' Message
             let length_bytes = (1 as u32).to_be_bytes();
@@ -144,11 +149,11 @@ async fn main() -> Result<()> {
             stream.write_all(&message_id).await.unwrap();
 
             // Get 'unchoke' message
-            let mut length_bytes = [0u8;4];
-            let mut message_id = [0u8;1];
+            let mut length_bytes = [0u8; 4];
+            let mut message_id = [0u8; 1];
             stream.read_exact(&mut length_bytes).await.unwrap();
             stream.read_exact(&mut message_id).await.unwrap(); // message id for unchoke is 1
-        
+
             // Send 'request' message
             for i in 0..torrent_pieces_hash.len() {
                 let this_piece_length = if i == torrent_pieces_hash.len() - 1 {
@@ -160,7 +165,7 @@ async fn main() -> Result<()> {
                 let mut begin_offset: u32 = 0;
 
                 while begin_offset < this_piece_length {
-                    let length = std::cmp::min(16*1024, this_piece_length - begin_offset);
+                    let length = std::cmp::min(16 * 1024, this_piece_length - begin_offset);
 
                     let length_bytes = (13u32).to_be_bytes();
                     let message_id: [u8; 1] = [6];
@@ -173,7 +178,7 @@ async fn main() -> Result<()> {
                     stream.write_all(&length_bytes).await.unwrap();
                     stream.write_all(&message_id).await.unwrap();
                     stream.write_all(&payload).await.unwrap();
-                    
+
                     begin_offset += length;
                 }
             }
@@ -188,8 +193,8 @@ async fn main() -> Result<()> {
                 let mut block_length = 0;
                 let mut piece_buffer = vec![0u8; this_piece_length as usize];
                 while block_length < this_piece_length {
-                    let mut length_bytes = [0u8;4];
-                    let mut message_id = [0u8;1];
+                    let mut length_bytes = [0u8; 4];
+                    let mut message_id = [0u8; 1];
                     stream.read_exact(&mut length_bytes).await.unwrap();
                     if u32::from_be_bytes(length_bytes) == 0 {
                         continue;
@@ -202,23 +207,28 @@ async fn main() -> Result<()> {
                             let _index = u32::from_be_bytes(payload[0..4].try_into().unwrap());
                             let begin = u32::from_be_bytes(payload[4..8].try_into().unwrap());
                             let block = &payload[8..];
-                            piece_buffer[begin as usize .. begin as usize + block.len()].copy_from_slice(block);
+                            piece_buffer[begin as usize..begin as usize + block.len()]
+                                .copy_from_slice(block);
                             block_length += block.len() as u32;
-                        },
-                        _ => ()
+                        }
+                        _ => (),
                     }
                 }
-                pieces_hashes.lock().await.push(sha1_bytes_to_hex(Sha1::digest(&piece_buffer), false).unwrap());
+                pieces_hashes
+                    .lock()
+                    .await
+                    .push(sha1_bytes_to_hex(Sha1::digest(&piece_buffer), false).unwrap());
                 pieces_bytes.lock().await.extend(piece_buffer);
-            }}));
-        }
-    
+            }
+        }));
+    }
+
     for handle in connections {
         handle.await?;
     }
 
     assert_eq!(&*torrent_pieces_hash, &*pieces_hashes.lock().await); // TODO: IF NOT MATCH THEN RETRY WITH ANOTHER PEER?
     std::fs::write(file_name, &*pieces_bytes.lock().await).unwrap();
-    
+
     Ok(())
 }

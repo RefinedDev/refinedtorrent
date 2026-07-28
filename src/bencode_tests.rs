@@ -20,7 +20,10 @@ fn list_test() {
 
 #[test]
 fn nested_lists() {
-    let decoded_value = bencode_parser::decode("lli1ei2eli3ei4eeel5:alphal4:betai5ei6el7:charliei8eeee3:ende".as_bytes()).unwrap();
+    let decoded_value = bencode_parser::decode(
+        "lli1ei2eli3ei4eeel5:alphal4:betai5ei6el7:charliei8eeee3:ende".as_bytes(),
+    )
+    .unwrap();
     println!("{}", decoded_value);
 }
 
@@ -32,7 +35,11 @@ fn dict_test() {
 
 #[test]
 fn nested_dicts() {
-    let decoded_value = bencode_parser::decode("d4:rootd6:configd5:debugi1e7:version3:1.0e4:infod3:agei20e4:name3:Bobee5:valuei42eee".as_bytes()).unwrap();
+    let decoded_value = bencode_parser::decode(
+        "d4:rootd6:configd5:debugi1e7:version3:1.0e4:infod3:agei20e4:name3:Bobee5:valuei42eee"
+            .as_bytes(),
+    )
+    .unwrap();
     println!("{}", decoded_value);
 }
 
