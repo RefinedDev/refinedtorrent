@@ -1,6 +1,7 @@
 mod bencode_parser;
 #[cfg(test)]
 mod bencode_tests;
+mod peer;
 
 use anyhow::Result;
 use reqwest;
@@ -63,8 +64,8 @@ async fn main() -> Result<()> {
     let bytes = std::fs::read("sample.torrent")?;
     let decoded_value = bencode_parser::decode(&bytes)?;
 
-    let treemap = decoded_value.as_dict().unwrap(); // Get the decoded value in a dictionary form
-    let info = treemap["info"].as_dict().unwrap(); // Get the info sub-dict
+    let decoded_value = decoded_value.as_dict().unwrap(); // Get the decoded value in a dictionary form
+    let info = decoded_value["info"].as_dict().unwrap(); // Get the info sub-dict
 
     // Converting the info sub_dict back to bencode byte array
     let mut info_bencode = Vec::with_capacity(234);
@@ -75,8 +76,8 @@ async fn main() -> Result<()> {
     info_bencode.push(b'e');
 
     let info_bencode = Arc::new(info_bencode);
-    // "announce" is the torrent link
-    let mut url = String::from_utf8(treemap["announce"].as_bytes().unwrap().to_vec())?;
+    // "announce" is the torrent link (ONLY HTTP(S) IS SUPPORTED NOT UDP)
+    let mut url = String::from_utf8(decoded_value["announce"].as_bytes().unwrap().to_vec())?;
     // Converting the bencode to hash and inserting in link
     url.push_str(&format!(
         "?info_hash={}",
@@ -157,9 +158,9 @@ async fn main() -> Result<()> {
             // Send 'request' message
             for i in 0..torrent_pieces_hash.len() {
                 let this_piece_length = if i == torrent_pieces_hash.len() - 1 {
-                    total_length - piece_length as u32 * (torrent_pieces_hash.len() as u32 - 1)
+                    total_length - piece_length * (torrent_pieces_hash.len() as u32 - 1)
                 } else {
-                    piece_length as u32
+                    piece_length
                 };
 
                 let mut begin_offset: u32 = 0;
@@ -186,9 +187,9 @@ async fn main() -> Result<()> {
             // Get 'piece' message and stich all pieces together
             for i in 0..torrent_pieces_hash.len() {
                 let this_piece_length = if i == torrent_pieces_hash.len() - 1 {
-                    total_length - piece_length as u32 * (torrent_pieces_hash.len() as u32 - 1)
+                    total_length - piece_length * (torrent_pieces_hash.len() as u32 - 1)
                 } else {
-                    piece_length as u32
+                    piece_length
                 };
                 let mut block_length = 0;
                 let mut piece_buffer = vec![0u8; this_piece_length as usize];
