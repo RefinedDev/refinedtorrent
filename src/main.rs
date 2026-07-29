@@ -2,121 +2,40 @@ mod bencode_parser;
 #[cfg(test)]
 mod bencode_tests;
 mod peer;
+mod torrent;
 
 use anyhow::Result;
-use reqwest;
-use sha1::{Digest, Sha1, digest::array::ArrayN};
-use std::fmt::Write;
+use sha1::{Digest, Sha1};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
-fn sha1_bytes_to_hex(hash: ArrayN<u8, 20>, percent: bool) -> Result<String> {
-    let mut encode = String::new();
-    for byte in hash {
-        if percent {
-            write!(encode, "%{:02x}", byte)?;
-        } else {
-            write!(encode, "{:02x}", byte)?;
-        }
-    }
-    Ok(encode)
-}
-
-fn hash_bytes_to_hex(hash: &[u8]) -> Result<String> {
-    let mut encode = String::new();
-    for byte in hash {
-        write!(encode, "{:02x}", byte)?;
-    }
-    Ok(encode)
-}
-
-fn get_peer_ips(bytes: &[u8]) -> Result<Vec<String>> {
-    let end = bytes.len() / 6;
-    let mut ips = Vec::with_capacity(end);
-    for i in 0..end {
-        let slice = &bytes[6 * i..6 * (i + 1)];
-        let mut ip = slice[0..4]
-            .iter()
-            .map(|int| int.to_string())
-            .collect::<Vec<String>>()
-            .join(".");
-        let port = u16::from_be_bytes([slice[4], slice[5]]);
-        write!(ip, ":{}", port)?;
-        ips.push(ip);
-    }
-    Ok(ips)
-}
-
-fn get_pieces(bytes: &[u8]) -> Result<Vec<String>> {
-    let end = bytes.len() / 20;
-    let mut pieces = Vec::with_capacity(end);
-    for i in 0..end {
-        let slice = &bytes[20 * i..20 * (i + 1)];
-        pieces.push(hash_bytes_to_hex(slice)?);
-    }
-    Ok(pieces)
-}
+use torrent::Torrent;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let bytes = std::fs::read("sample.torrent")?;
-    let decoded_value = bencode_parser::decode(&bytes)?;
+    let torrent = Torrent::new(bencode_parser::decode(&bytes)?, "hellomynameisgamer12", "6881");
+    
+    let info_bencode = Arc::new(torrent.get_info_bencode());
+    let ips = torrent.get_peer_ips(&info_bencode).await?;
 
-    let decoded_value = decoded_value.as_dict().unwrap(); // Get the decoded value in a dictionary form
-    let info = decoded_value["info"].as_dict().unwrap(); // Get the info sub-dict
-
-    // Converting the info sub_dict back to bencode byte array
-    let mut info_bencode = Vec::with_capacity(234);
-    info_bencode.push(b'd');
-    for (k, v) in info.iter() {
-        bencode_parser::encode(v, &mut info_bencode, Some(k));
-    }
-    info_bencode.push(b'e');
-
-    let info_bencode = Arc::new(info_bencode);
-    // "announce" is the torrent link (ONLY HTTP(S) IS SUPPORTED NOT UDP)
-    let mut url = String::from_utf8(decoded_value["announce"].as_bytes().unwrap().to_vec())?;
-    // Converting the bencode to hash and inserting in link
-    url.push_str(&format!(
-        "?info_hash={}",
-        sha1_bytes_to_hex(Sha1::digest(&*info_bencode), true)?
-    ));
-    // The rest of the parameters; Not adding the info_hash along with these because parse_with_params double encodes
-    let params = [
-        ("peer_id", "hellomynameisgamer12".to_string()),
-        ("port", 6881.to_string()),
-        ("uploaded", 0.to_string()),
-        ("downloaded", 0.to_string()),
-        ("left", info["length"].as_int().unwrap().to_string()),
-        ("compact", 1.to_string()),
-    ];
-    let url = reqwest::Url::parse_with_params(&url, &params)?;
-    let response = reqwest::get(url).await?.bytes().await?;
-    let decoded = bencode_parser::decode(&response)?;
-    let decoded_dict = decoded.as_dict().unwrap();
-
-    let torrent_pieces_hash = Arc::new(get_pieces(*&info["pieces"].as_bytes().unwrap())?);
-    let piece_length = &info["piece length"].as_int().unwrap();
-    let total_length = &info["length"].as_int().unwrap();
-    let file_name = str::from_utf8(&info["name"].as_bytes().unwrap()).unwrap();
-
-    let ips = get_peer_ips(decoded_dict["peers"].as_bytes().unwrap())?; // Extract <ip_addr:port> of peers
-    let pieces_hashes = Arc::new(Mutex::new(Vec::with_capacity(torrent_pieces_hash.len())));
-    let pieces_bytes = Arc::new(Mutex::new(Vec::with_capacity(torrent_pieces_hash.len())));
+    let hashed_torrent_pieces = Arc::new(torrent.get_piece_hashes()?);
+    let hashed_obtained_pieces = Arc::new(Mutex::new(Vec::with_capacity(hashed_torrent_pieces.len())));
+    let obtained_pieces_bytes = Arc::new(Mutex::new(Vec::with_capacity(hashed_torrent_pieces.len())));
 
     let mut connections = Vec::with_capacity(ips.len());
     {
         // TODO: IMPLEMENT MULTI-PEER
         let info_hash = Arc::clone(&info_bencode);
-        let torrent_pieces_hash = Arc::clone(&torrent_pieces_hash);
-        let pieces_hashes = Arc::clone(&pieces_hashes);
-        let pieces_bytes = Arc::clone(&pieces_bytes);
+        let hashed_torrent_pieces = Arc::clone(&hashed_torrent_pieces);
+        let hashed_obtained_pieces = Arc::clone(&hashed_obtained_pieces);
+        let obtained_pieces_bytes = Arc::clone(&obtained_pieces_bytes);
 
         let ip = ips[0].clone();
-        let total_length = total_length.clone() as u32;
-        let piece_length = piece_length.clone() as u32;
+        let total_length = torrent.total_length.clone() as u32;
+        let piece_length = torrent.piece_length.clone() as u32;
 
         connections.push(tokio::spawn(async move {
             let mut stream = TcpStream::connect(ip).await.unwrap();
@@ -156,9 +75,9 @@ async fn main() -> Result<()> {
             stream.read_exact(&mut message_id).await.unwrap(); // message id for unchoke is 1
 
             // Send 'request' message
-            for i in 0..torrent_pieces_hash.len() {
-                let this_piece_length = if i == torrent_pieces_hash.len() - 1 {
-                    total_length - piece_length * (torrent_pieces_hash.len() as u32 - 1)
+            for i in 0..hashed_torrent_pieces.len() {
+                let this_piece_length = if i == hashed_torrent_pieces.len() - 1 {
+                    total_length - piece_length * (hashed_torrent_pieces.len() as u32 - 1)
                 } else {
                     piece_length
                 };
@@ -185,9 +104,9 @@ async fn main() -> Result<()> {
             }
 
             // Get 'piece' message and stich all pieces together
-            for i in 0..torrent_pieces_hash.len() {
-                let this_piece_length = if i == torrent_pieces_hash.len() - 1 {
-                    total_length - piece_length * (torrent_pieces_hash.len() as u32 - 1)
+            for i in 0..hashed_torrent_pieces.len() {
+                let this_piece_length = if i == hashed_torrent_pieces.len() - 1 {
+                    total_length - piece_length * (hashed_torrent_pieces.len() as u32 - 1)
                 } else {
                     piece_length
                 };
@@ -215,11 +134,11 @@ async fn main() -> Result<()> {
                         _ => (),
                     }
                 }
-                pieces_hashes
+                hashed_obtained_pieces
                     .lock()
                     .await
-                    .push(sha1_bytes_to_hex(Sha1::digest(&piece_buffer), false).unwrap());
-                pieces_bytes.lock().await.extend(piece_buffer);
+                    .push(torrent::sha1_bytes_to_hex(Sha1::digest(&piece_buffer), false).unwrap());
+                obtained_pieces_bytes.lock().await.extend(piece_buffer);
             }
         }));
     }
@@ -228,8 +147,8 @@ async fn main() -> Result<()> {
         handle.await?;
     }
 
-    assert_eq!(&*torrent_pieces_hash, &*pieces_hashes.lock().await); // TODO: IF NOT MATCH THEN RETRY WITH ANOTHER PEER?
-    std::fs::write(file_name, &*pieces_bytes.lock().await).unwrap();
+    assert_eq!(&*hashed_torrent_pieces, &*hashed_obtained_pieces.lock().await); // TODO: IF NOT MATCH THEN RETRY WITH ANOTHER PEER?
+    std::fs::write(torrent.save_file_name, &*obtained_pieces_bytes.lock().await).unwrap();
 
     Ok(())
 }
