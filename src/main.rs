@@ -11,21 +11,25 @@ use tokio::sync::{Mutex, Notify};
 use peer::Peer;
 use torrent::Torrent;
 
+pub fn generate_peer_id() -> String {
+    const CHARS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+
+    (0..20)
+        .map(|_| CHARS[rand::random_range(0..CHARS.len())] as char)
+        .collect()
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let bytes = std::fs::read("sample.torrent")?;
-    let torrent = Torrent::new(
-        bencode_parser::decode(&bytes)?,
-        "hellomynameisgamer12",
-        "6881",
-    );
+    let bytes = std::fs::read("debian.torrent")?;
+    let peer_id = generate_peer_id();
+    let torrent = Torrent::new(bencode_parser::decode(&bytes)?, &peer_id, "6881");
 
     let info_bencode = Arc::new(torrent.get_info_bencode());
     let ips = torrent.get_peer_ips(&info_bencode).await?;
 
     let hashed_torrent_pieces: Arc<Vec<String>> = Arc::new(torrent.get_piece_hashes()?);
-    let bytes_obtained_pieces =
-        Arc::new(Mutex::new(vec![vec![]; hashed_torrent_pieces.len()]));
+    let bytes_obtained_pieces = Arc::new(Mutex::new(vec![vec![]; hashed_torrent_pieces.len()]));
 
     let pieces_left = Arc::new(Mutex::new((0..hashed_torrent_pieces.len()).collect()));
     let pieces_done = Arc::new(AtomicUsize::new(0));
@@ -37,6 +41,7 @@ async fn main() -> Result<()> {
         let peer = Peer::new(ip);
         peer.connect(
             &mut tasks,
+            &peer_id,
             Arc::clone(&info_bencode),
             Arc::clone(&hashed_torrent_pieces),
             Arc::clone(&bytes_obtained_pieces),
@@ -51,6 +56,34 @@ async fn main() -> Result<()> {
     for task in tasks {
         task.await?;
     }
+
+    println!("Done: {:?}", pieces_done);
+    while pieces_done.load(std::sync::atomic::Ordering::Relaxed) != hashed_torrent_pieces.len() {
+        // Some pieces might still not have been obtained and all the peers disconneted due to timeeout
+        println!("Need some more");
+        let mut tasks = Vec::with_capacity(ips.len());
+        let ips = torrent.get_peer_ips(&info_bencode).await?;
+        for ip in ips.iter() {
+            let peer = Peer::new(ip);
+            peer.connect(
+                &mut tasks,
+                &peer_id,
+                Arc::clone(&info_bencode),
+                Arc::clone(&hashed_torrent_pieces),
+                Arc::clone(&bytes_obtained_pieces),
+                Arc::clone(&pieces_left),
+                Arc::clone(&pieces_done),
+                torrent.total_length.clone() as u32,
+                torrent.piece_length.clone() as u32,
+                Arc::clone(&all_done_event),
+            );
+        }
+
+        for task in tasks {
+            task.await?;
+        }
+    }
+    println!("Done: {:?}", pieces_done);
 
     // We have disconnected all connections so I can safely get rid of the Mutex
     let mut joined_bytes = Vec::new();

@@ -3,6 +3,12 @@ use anyhow::Result;
 use sha1::{Digest, Sha1, digest::array::ArrayN};
 use std::fmt::Write;
 
+pub fn generate_key() -> String {
+    (0..8)
+        .map(|_| format!("{:x}", rand::random_range(0..100)))
+        .collect()
+}
+
 pub fn sha1_bytes_to_hex(hash: ArrayN<u8, 20>, percent: bool) -> Result<String> {
     let mut encode = String::new();
     for byte in hash {
@@ -93,11 +99,22 @@ impl<'a> Torrent<'a> {
             ("downloaded", "0"),
             ("left", &info["length"].as_int().unwrap().to_string()),
             ("compact", "1"),
+            ("event", "started"),
+            ("key", &generate_key())
         ];
         let url = reqwest::Url::parse_with_params(&url, &params)?;
-        let response = reqwest::get(url).await?.bytes().await?;
+        
+        let response = reqwest::Client::new()
+            .get(url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36")
+            .send()
+            .await?
+            .bytes()
+            .await?;
+
         let decoded = bencode_parser::decode(&response)?;
         let decoded_dict = decoded.as_dict().unwrap();
+
         let bytes = decoded_dict["peers"].as_bytes().unwrap();
         let end = bytes.len() / 6;
         let mut ips = Vec::with_capacity(end);

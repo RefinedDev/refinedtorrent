@@ -837,6 +837,7 @@ name = "refinedtorrent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "rand",
  "reqwest",
  "sha1",
  "tokio",
