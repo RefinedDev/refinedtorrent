@@ -1,7 +1,8 @@
 use anyhow::Result;
+use indicatif::ProgressBar;
+use log::{info, warn};
 use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+    Arc, atomic::{AtomicUsize, Ordering},
 };
 
 use sha1::{Digest, Sha1};
@@ -40,6 +41,8 @@ impl<'a> Peer<'a> {
         total_length: u32,
         piece_length: u32,
         disconnect_event: Arc<Notify>,
+        progress_bar: Arc<ProgressBar>,
+        connected_peers: Arc<AtomicUsize>,
     ) {
         let ip = self.ip.to_owned();
         let peer_id = peer_id.to_owned();
@@ -47,6 +50,7 @@ impl<'a> Peer<'a> {
             let current_piece_index = AtomicUsize::new(usize::MAX);
 
             let result = async || -> Result<()> {
+                connected_peers.fetch_add(1, Ordering::Relaxed);
                 let mut stream = TcpStream::connect(&ip).await?;
                 let mut choked = true;
 
@@ -79,6 +83,7 @@ impl<'a> Peer<'a> {
 
                 loop {
                     if pieces_done.load(Ordering::Relaxed) == hashed_torrent_pieces.len() {
+                        connected_peers.fetch_sub(1, Ordering::Relaxed);
                         drop(stream);
                         break;
                     }
@@ -92,11 +97,13 @@ impl<'a> Peer<'a> {
                             stream.read_exact(&mut message_id).await?;
                         }
                         _ = disconnect_event.notified() => {
+                            connected_peers.fetch_sub(1, Ordering::Relaxed);
                             drop(stream);
                             break;
                         }
-                        _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {
-                            println!("{ip} timed out!");
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(90)) => {
+                            info!("<{ip}> timed out!");
+                            connected_peers.fetch_sub(1, Ordering::Relaxed);
                             drop(stream);
                             break;
                         }
@@ -149,18 +156,15 @@ impl<'a> Peer<'a> {
                                     false,
                                 )?;
                                 if piece_hash == &buffer_hashed {
-                                    println!(
-                                        "<{}> has sent the piece indexed <{}>",
-                                        &ip, current_piece_index_get
-                                    );
                                     bytes_obtained_pieces.lock().await[current_piece_index_get] =
                                         piece_buffer;
                                     let done = pieces_done.fetch_add(1, Ordering::Relaxed) + 1;
+                                    progress_bar.inc(1);
                                     if done == hashed_torrent_pieces.len() {
                                         disconnect_event.notify_waiters(); // Tell every peer everything is downloaded and to disconnect
                                     }
                                     if current_piece_index_get == 0 {
-                                        println!(
+                                        info!(
                                             "PiecesLeft: {:?}\nDone: {}\nTotal: {}",
                                             pieces_left,
                                             done,
@@ -225,9 +229,6 @@ impl<'a> Peer<'a> {
                             begin_offset += length;
                         }
                     }
-                    // else {
-                    //     println!("Choked: {}\nCurrent Piece Index: {}", choked, current_piece_index);
-                    // }
                 }
                 Ok(())
             };
@@ -238,23 +239,24 @@ impl<'a> Peer<'a> {
                 match r {
                     Ok(()) => break,
                     Err(e) => {
-                        println!("<{ip}> disconnected: {e:?}");
+                        connected_peers.fetch_sub(1, Ordering::Relaxed);
+                        warn!("<{ip}> disconnected: {e:?}");
                         if current_piece_index.load(Ordering::Relaxed) != usize::MAX {
                             pieces_left.lock().await.push(current_piece_index.load(Ordering::Relaxed));
                             current_piece_index.store(usize::MAX, Ordering::Relaxed);
                         }
-                        if pieces_done.load(Ordering::Relaxed) == hashed_torrent_pieces.len() || retries == 5 {
-                            println!("<{ip}> will not try to reconnect anymore");
+                        if pieces_done.load(Ordering::Relaxed) == hashed_torrent_pieces.len() || retries == 3 {
+                            info!("<{ip}> will not try to reconnect anymore");
                             break;
                         }
                         tokio::select! {
                             _ = disconnect_event.notified() => {
-                                println!("<{ip}> will not try to reconnect anymore"); 
+                                info!("<{ip}> will not try to reconnect anymore"); 
                                 break
                             },
                             _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
                                 retries += 1;
-                                println!("Attempting to reconnect to <{ip}>\nRETRIES:{retries}")
+                                info!("Attempting to reconnect to <{ip}>; Total reconnections :<{retries}>")
                             }
                         }
                     }
