@@ -5,7 +5,11 @@ mod peer;
 mod torrent;
 
 use anyhow::Result;
-use std::sync::{Arc, atomic::AtomicUsize};
+use rfd::FileDialog;
+use std::{
+    path::PathBuf,
+    sync::{Arc, atomic::AtomicUsize},
+};
 use tokio::sync::{Mutex, Notify};
 
 use peer::Peer;
@@ -21,12 +25,22 @@ pub fn generate_peer_id() -> String {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let bytes = std::fs::read("debian.torrent")?;
+    let file: Option<PathBuf> = FileDialog::new()
+        .set_title("Choose a Torrent")
+        .set_directory("/")
+        .add_filter("Torrent", &["torrent"])
+        .pick_file();
+
+    let bytes: Vec<u8>;
+    match file {
+        Some(path) => bytes = std::fs::read(path)?,
+        None => panic!("No .torrent file selected"),
+    }
     let peer_id = generate_peer_id();
     let torrent = Torrent::new(bencode_parser::decode(&bytes)?, &peer_id, "6881");
 
     let info_bencode = Arc::new(torrent.get_info_bencode());
-    
+
     let hashed_torrent_pieces: Arc<Vec<String>> = Arc::new(torrent.get_piece_hashes()?);
     let bytes_obtained_pieces = Arc::new(Mutex::new(vec![vec![]; hashed_torrent_pieces.len()]));
 
