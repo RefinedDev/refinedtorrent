@@ -39,19 +39,19 @@ impl<'a> Peer<'a> {
         
         total_length: u32,
         piece_length: u32,
-        all_done_event: Arc<Notify>,
+        disconnect_event: Arc<Notify>,
     ) {
         let ip = self.ip.to_owned();
         let peer_id = peer_id.to_owned();
         tasks.push(tokio::spawn(async move {
-            // PIECE RELATED
-            let mut current_piece_index: usize = usize::MAX;
-            let mut piece_buffer: Vec<u8> = Vec::new();
-            let mut block_length: u32 = 0;
-            
-            let result: Result<()> = async {
+            let current_piece_index = AtomicUsize::new(usize::MAX);
+
+            let result = async || -> Result<()> {
                 let mut stream = TcpStream::connect(&ip).await?;
                 let mut choked = true;
+
+                let mut piece_buffer: Vec<u8> = Vec::new();
+                let mut block_length: u32 = 0;
 
                 let mut h1 = [0u8; 68]; // To establish a connection we need to do a handshake
                 h1[0] = 19;
@@ -91,7 +91,12 @@ impl<'a> Peer<'a> {
                             result?;
                             stream.read_exact(&mut message_id).await?;
                         }
-                        _ = all_done_event.notified() => {
+                        _ = disconnect_event.notified() => {
+                            drop(stream);
+                            break;
+                        }
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {
+                            println!("{ip} timed out!");
                             drop(stream);
                             break;
                         }
@@ -106,9 +111,10 @@ impl<'a> Peer<'a> {
                         [5] => (), // bitfield (we already have it)
                         [6] => (), // peer request but i aint seeding 👻
                         [7] => {
+                            let current_piece_index_get = current_piece_index.load(Ordering::Relaxed);
                             // All pieces except MAYBE the last one have the same length, the piece can be truncated and then the last won't be the same as rest
                             let this_piece_length =
-                                if current_piece_index == hashed_torrent_pieces.len() - 1 {
+                                if current_piece_index_get == hashed_torrent_pieces.len() - 1 {
                                     total_length
                                         - piece_length * (hashed_torrent_pieces.len() as u32 - 1)
                                 } else {
@@ -120,7 +126,7 @@ impl<'a> Peer<'a> {
                             stream.read_exact(&mut payload).await?;
 
                             // Sanity check; why getting a piece if never asked?
-                            if current_piece_index == usize::MAX {
+                            if current_piece_index_get == usize::MAX {
                                 continue;
                             }
 
@@ -137,32 +143,36 @@ impl<'a> Peer<'a> {
 
                             if block_length >= this_piece_length {
                                 // Should'nt ever be greater tho but still
-                                let piece_hash = &hashed_torrent_pieces[current_piece_index];
+                                let piece_hash = &hashed_torrent_pieces[current_piece_index_get];
                                 let buffer_hashed = crate::torrent::sha1_bytes_to_hex(
                                     Sha1::digest(&piece_buffer),
                                     false,
-                                )
-                                ?;
+                                )?;
                                 if piece_hash == &buffer_hashed {
                                     println!(
                                         "<{}> has sent the piece indexed <{}>",
-                                        &ip, current_piece_index
+                                        &ip, current_piece_index_get
                                     );
-                                    bytes_obtained_pieces.lock().await[current_piece_index] =
+                                    bytes_obtained_pieces.lock().await[current_piece_index_get] =
                                         piece_buffer;
                                     let done = pieces_done.fetch_add(1, Ordering::Relaxed) + 1;
                                     if done == hashed_torrent_pieces.len() {
-                                        all_done_event.notify_waiters(); // Tell every peer everything is downloaded and DC
+                                        disconnect_event.notify_waiters(); // Tell every peer everything is downloaded and to disconnect
                                     }
-                                    if current_piece_index == 0 {
-                                        println!("Pieces Left: {:?}\nDone: {}\n Total: {}", pieces_left, done, hashed_torrent_pieces.len());
+                                    if current_piece_index_get == 0 {
+                                        println!(
+                                            "PiecesLeft: {:?}\nDone: {}\nTotal: {}",
+                                            pieces_left,
+                                            done,
+                                            hashed_torrent_pieces.len()
+                                        );
                                     }
                                 } else {
                                     // We reject this piece, bad peer
-                                    pieces_left.lock().await.push(current_piece_index);
+                                    pieces_left.lock().await.push(current_piece_index_get);
                                 }
                                 block_length = 0;
-                                current_piece_index = usize::MAX;
+                                current_piece_index.store(usize::MAX, Ordering::Relaxed);
                                 piece_buffer = vec![];
                             }
                         }
@@ -170,7 +180,7 @@ impl<'a> Peer<'a> {
                         _ => (),
                     }
 
-                    if !choked && current_piece_index == usize::MAX {
+                    if !choked && current_piece_index.load(Ordering::Relaxed) == usize::MAX {
                         // Not choked and not already trying to join a piece
                         // check if peer has piece and then send a request
                         {
@@ -182,11 +192,11 @@ impl<'a> Peer<'a> {
                             if !peer_has_piece(&bitfield, *piece_index) {
                                 continue;
                             };
-                            current_piece_index = pieces.pop().unwrap();
+                            current_piece_index.store(pieces.pop().unwrap(), Ordering::Relaxed);
                         } // piece mutex lock unlocks for other tasks
 
                         // All pieces except MAYBE the last one have the same length, the piece can be truncated and then the last won't be the same as rest
-                        let this_piece_length = if current_piece_index
+                        let this_piece_length = if current_piece_index.load(Ordering::Relaxed)
                             == hashed_torrent_pieces.len() - 1
                         {
                             total_length - piece_length * (hashed_torrent_pieces.len() as u32 - 1)
@@ -204,7 +214,7 @@ impl<'a> Peer<'a> {
                             let mut payload = [0u8; 12];
 
                             payload[0..4]
-                                .copy_from_slice(&(current_piece_index as u32).to_be_bytes());
+                                .copy_from_slice(&(current_piece_index.load(Ordering::Relaxed) as u32).to_be_bytes());
                             payload[4..8].copy_from_slice(&begin_offset.to_be_bytes());
                             payload[8..12].copy_from_slice(&length.to_be_bytes());
 
@@ -220,15 +230,37 @@ impl<'a> Peer<'a> {
                     // }
                 }
                 Ok(())
-            }
-            .await;
+            };
 
-            if let Err(e) = result {
-                println!("[{ip}] peer disconnected: {e:?}");
-                if current_piece_index != usize::MAX {
-                    pieces_left.lock().await.push(current_piece_index);
+            let mut retries = 0;
+            loop {
+                let r = result().await;
+                match r {
+                    Ok(()) => break,
+                    Err(e) => {
+                        println!("<{ip}> disconnected: {e:?}");
+                        if current_piece_index.load(Ordering::Relaxed) != usize::MAX {
+                            pieces_left.lock().await.push(current_piece_index.load(Ordering::Relaxed));
+                            current_piece_index.store(usize::MAX, Ordering::Relaxed);
+                        }
+                        if pieces_done.load(Ordering::Relaxed) == hashed_torrent_pieces.len() || retries == 5 {
+                            println!("<{ip}> will not try to reconnect anymore");
+                            break;
+                        }
+                        tokio::select! {
+                            _ = disconnect_event.notified() => {
+                                println!("<{ip}> will not try to reconnect anymore"); 
+                                break
+                            },
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                                retries += 1;
+                                println!("Attempting to reconnect to <{ip}>\nRETRIES:{retries}")
+                            }
+                        }
+                    }
                 }
             }
+
         }));
     }
 }
