@@ -2,7 +2,8 @@ use anyhow::Result;
 use indicatif::ProgressBar;
 use log::{info, warn};
 use std::sync::{
-    Arc, atomic::{AtomicUsize, Ordering},
+    Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use sha1::{Digest, Sha1};
@@ -37,7 +38,7 @@ impl<'a> Peer<'a> {
         bytes_obtained_pieces: Arc<Mutex<Vec<Vec<u8>>>>,
         pieces_left: Arc<Mutex<Vec<usize>>>,
         pieces_done: Arc<AtomicUsize>,
-        
+
         total_length: u32,
         piece_length: u32,
         disconnect_event: Arc<Notify>,
@@ -57,15 +58,7 @@ impl<'a> Peer<'a> {
                 let mut piece_buffer: Vec<u8> = Vec::new();
                 let mut block_length: u32 = 0;
 
-                let mut h1 = [0u8; 68]; // To establish a connection we need to do a handshake
-                h1[0] = 19;
-                h1[1..20].copy_from_slice(b"BitTorrent protocol");
-                h1[20..28].fill(0);
-                h1[28..48].copy_from_slice(&Sha1::digest(&*info_hash));
-                h1[48..68].copy_from_slice(peer_id.as_bytes());
-                stream.write_all(&h1).await?;
-                let mut h2 = [0u8; 68]; // The peer returns something similar in return
-                stream.read_exact(&mut h2).await?;
+                Self::perform_handshake(&mut stream, &info_hash, &peer_id).await?;
 
                 // Get 'bitfield' payload
                 let mut length_bytes = [0u8; 4];
@@ -76,7 +69,7 @@ impl<'a> Peer<'a> {
                 stream.read_exact(&mut bitfield).await?;
 
                 // Send 'interested' Message
-                let length_bytes = (1 as u32).to_be_bytes();
+                let length_bytes = 1_u32.to_be_bytes();
                 let message_id: [u8; 1] = [2];
                 stream.write_all(&length_bytes).await?;
                 stream.write_all(&message_id).await?;
@@ -264,5 +257,22 @@ impl<'a> Peer<'a> {
             }
 
         }));
+    }
+
+    async fn perform_handshake(
+        stream: &mut TcpStream,
+        info_hash: &[u8],
+        peer_id: &str,
+    ) -> Result<(), anyhow::Error> {
+        let mut h1 = [0u8; 68];
+        h1[0] = 19;
+        h1[1..20].copy_from_slice(b"BitTorrent protocol");
+        h1[20..28].fill(0);
+        h1[28..48].copy_from_slice(&Sha1::digest(info_hash));
+        h1[48..68].copy_from_slice(peer_id.as_bytes());
+        stream.write_all(&h1).await?;
+        let mut h2 = [0u8; 68];
+        stream.read_exact(&mut h2).await?;
+        Ok(())
     }
 }

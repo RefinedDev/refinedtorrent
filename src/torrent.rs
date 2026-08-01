@@ -56,7 +56,7 @@ impl<'a> Torrent<'a> {
             save_file_name: str::from_utf8(info["name"].as_bytes().context("'name' is not bytes")?)
                 .context("file name is not valid utf8")?,
 
-            data: data,
+            data,
             peer_id,
             port,
         })
@@ -168,7 +168,7 @@ impl<'a> Torrent<'a> {
             write!(ip, ":{}", port)?;
             ips.push(ip);
         }
-        
+
         Ok(ips)
     }
 }

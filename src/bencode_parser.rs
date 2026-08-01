@@ -1,12 +1,14 @@
 use anyhow::{Context, Result, anyhow};
 use std::collections::BTreeMap;
 
+type Dict<'a> = BTreeMap<String, BencodeType<'a>>;
+
 #[derive(Debug)]
 pub enum BencodeType<'a> {
     String(&'a [u8]),
     Integer(i64),
     List(Vec<BencodeType<'a>>),
-    Dict(BTreeMap<String, BencodeType<'a>>),
+    Dict(Dict<'a>),
 }
 
 impl<'a> BencodeType<'a> {
@@ -73,10 +75,10 @@ fn decode_str(encoded: &[u8]) -> Result<(usize, usize)> {
             String::from_utf8_lossy(encoded)
         )
     })?;
-    return Ok((
+    Ok((
         colon_index,
         str::from_utf8(&encoded[..colon_index])?.parse::<usize>()?,
-    ));
+    ))
 }
 
 // Numbers are of the form "i<number>e"
@@ -91,7 +93,7 @@ fn decode_number(encoded: &[u8]) -> Result<(i64, usize)> {
             )
         })?],
     )?;
-    return Ok((number_string.parse::<i64>()?, number_string.len()));
+    Ok((number_string.parse::<i64>()?, number_string.len()))
 }
 
 // Lists are of the form "l<item1><item2>...<itemN>e"
@@ -99,8 +101,7 @@ fn decode_number(encoded: &[u8]) -> Result<(i64, usize)> {
 fn decode_list<'a>(mut rest: &'a [u8]) -> Result<(Vec<BencodeType<'a>>, Option<&'a [u8]>)> {
     let mut list: Vec<BencodeType> = Vec::new();
     while !rest.is_empty() {
-        let first_char = rest
-            .get(0)
+        let first_char = rest.first()
             .ok_or_else(|| anyhow!("bencode string is empty!"))?;
         if first_char.is_ascii_digit() {
             // string
@@ -115,19 +116,25 @@ fn decode_list<'a>(mut rest: &'a [u8]) -> Result<(Vec<BencodeType<'a>>, Option<&
             list.push(BencodeType::Integer(number));
         } else if first_char == &b'l' {
             // list
-            rest = rest.strip_prefix(b"l").context("slice did not begin with 'l'")?;
+            rest = rest
+                .strip_prefix(b"l")
+                .context("slice did not begin with 'l'")?;
             let recursed = decode_list(rest)?;
             list.push(BencodeType::List(recursed.0));
             rest = recursed.1.unwrap()
         } else if first_char == &b'd' {
             // dict
-            rest = rest.strip_prefix(b"d").context("slice did not begin with 'd'")?;
+            rest = rest
+                .strip_prefix(b"d")
+                .context("slice did not begin with 'd'")?;
             let recursed = decode_dict(rest)?;
             list.push(BencodeType::Dict(recursed.0));
             rest = recursed.1.unwrap()
         } else if first_char == &b'e' {
             // only gonna happen during recursion or if the bencode is faulty
-            rest = rest.strip_prefix(b"e").context("slice did not begin with 'e'")?;
+            rest = rest
+                .strip_prefix(b"e")
+                .context("slice did not begin with 'e'")?;
             return Ok((list, Some(rest)));
         }
     }
@@ -140,13 +147,12 @@ fn decode_list<'a>(mut rest: &'a [u8]) -> Result<(Vec<BencodeType<'a>>, Option<&
 // Therefore I am taking the liberty of checking and converting byte strings to dict keys
 fn decode_dict<'a>(
     mut rest: &'a [u8],
-) -> Result<(BTreeMap<String, BencodeType<'a>>, Option<&'a [u8]>)> {
+) -> Result<(Dict<'a>, Option<&'a [u8]>)> {
     let mut dict: BTreeMap<String, BencodeType> = BTreeMap::new();
     let mut key: Option<String> = None;
 
     while !rest.is_empty() {
-        let first_char = rest
-            .get(0)
+        let first_char = rest.first()
             .ok_or_else(|| anyhow!("bencode string is empty!"))?;
         if first_char.is_ascii_digit() {
             // string
@@ -166,19 +172,25 @@ fn decode_dict<'a>(
             dict.insert(key.take().unwrap(), BencodeType::Integer(number));
         } else if first_char == &b'l' {
             // list
-            rest = rest.strip_prefix(b"l").context("slice did not begin with 'l'")?;
+            rest = rest
+                .strip_prefix(b"l")
+                .context("slice did not begin with 'l'")?;
             let recursed = decode_list(rest)?;
             dict.insert(key.take().unwrap(), BencodeType::List(recursed.0));
             rest = recursed.1.unwrap()
         } else if first_char == &b'd' {
             // dict
-            rest = rest.strip_prefix(b"d").context("slice did not begin with 'd'")?;
+            rest = rest
+                .strip_prefix(b"d")
+                .context("slice did not begin with 'd'")?;
             let recursed = decode_dict(rest)?;
             dict.insert(key.take().unwrap(), BencodeType::Dict(recursed.0));
             rest = recursed.1.unwrap()
         } else if first_char == &b'e' {
             // only gonna during recursion or if the bencode is faulty
-            rest = rest.strip_prefix(b"e").context("slice did not begin with 'e'")?;
+            rest = rest
+                .strip_prefix(b"e")
+                .context("slice did not begin with 'e'")?;
             return Ok((dict, Some(rest)));
         }
     }
@@ -187,17 +199,16 @@ fn decode_dict<'a>(
 }
 
 pub fn decode<'a>(encoded_value: &'a [u8]) -> Result<BencodeType<'a>> {
-    let first_char = encoded_value
-        .get(0)
+    let first_char = encoded_value.first()
         .ok_or_else(|| anyhow!("bencode string is empty!"))?;
     if first_char.is_ascii_digit() {
         // string
-        let (colon_idx, strlen) = decode_str(&encoded_value)?;
+        let (colon_idx, strlen) = decode_str(encoded_value)?;
         let string = &encoded_value[colon_idx + 1..colon_idx + 1 + strlen];
-        return Ok(BencodeType::String(string));
+        Ok(BencodeType::String(string))
     } else if first_char == &b'i' {
         // number
-        return Ok(BencodeType::Integer(decode_number(&encoded_value)?.0));
+        Ok(BencodeType::Integer(decode_number(encoded_value)?.0))
     } else if first_char == &b'l' {
         // list
         let rest = encoded_value
@@ -206,7 +217,7 @@ pub fn decode<'a>(encoded_value: &'a [u8]) -> Result<BencodeType<'a>> {
             .ok_or_else(|| {
                 anyhow!(
                     "Invalid bencode {}",
-                    String::from_utf8_lossy(&encoded_value)
+                    String::from_utf8_lossy(encoded_value)
                 )
             })?;
         return Ok(BencodeType::List(decode_list(rest)?.0));
@@ -218,14 +229,14 @@ pub fn decode<'a>(encoded_value: &'a [u8]) -> Result<BencodeType<'a>> {
             .ok_or_else(|| {
                 anyhow!(
                     "Invalid bencode {}",
-                    String::from_utf8_lossy(&encoded_value)
+                    String::from_utf8_lossy(encoded_value)
                 )
             })?;
         return Ok(BencodeType::Dict(decode_dict(rest)?.0));
     } else {
         panic!(
             "Unhandled encoded value: {}",
-            String::from_utf8_lossy(&encoded_value)
+            String::from_utf8_lossy(encoded_value)
         )
     }
 }
@@ -239,7 +250,7 @@ pub fn encode(value: &BencodeType, bencoded: &mut Vec<u8>, key: Option<&str>) {
         BencodeType::String(str_bytes) => {
             bencoded.extend_from_slice(str_bytes.len().to_string().as_bytes());
             bencoded.push(b':');
-            bencoded.extend_from_slice(*str_bytes);
+            bencoded.extend_from_slice(str_bytes);
         }
         BencodeType::Integer(int) => {
             bencoded.push(b'i');
