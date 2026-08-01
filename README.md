@@ -42,10 +42,10 @@ https://github.com/user-attachments/assets/9e560b12-a7b1-4406-a1e9-5df60de7ab02
 ```bash
 git clone https://github.com/RefinedDev/refinedtorrent.git
 cd refinedtorrent
-cargo run --release
+cargo run --release -- <path/to/torrent_file>
 ```
 
-A file dialog will pop up allowing you to select the `.torrent` file
+For more information, try `--help`.
 
 ## License
 
