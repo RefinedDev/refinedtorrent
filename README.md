@@ -26,6 +26,12 @@ This was a learning project, not a full BitTorrent client:
 
 Because of this, the client works best against torrents with a healthy HTTP tracker (e.g. official Linux distro ISOs), and won't find peers for trackerless/DHT-only torrents.
 
+## Showcase
+
+[Video](https://github.com/user-attachments/assets/9e560b12-a7b1-4406-a1e9-5df60de7ab02) of downloading a sample.txt file and debian ISO and matching the ISO's SHA256 with the published checksum
+
+https://github.com/user-attachments/assets/9e560b12-a7b1-4406-a1e9-5df60de7ab02
+
 ## Notes
 
 - Debugging networking conditions that don't show up in a toy example: rate limiting/throttling, and connectivity issues caused by CGNAT (My ISP 😡)
@@ -40,12 +46,6 @@ cargo run --release
 ```
 
 A file dialog will pop up allowing you to select the `.torrent` file
-
-## Showcase
-
-[Video](https://github.com/user-attachments/assets/9e560b12-a7b1-4406-a1e9-5df60de7ab02) of downloading a sample.txt file and debian ISO and matching the ISO's SHA256 with the published checksum
-
-https://github.com/user-attachments/assets/9e560b12-a7b1-4406-a1e9-5df60de7ab02
 
 ## License
 
