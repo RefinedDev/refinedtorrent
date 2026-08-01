@@ -38,9 +38,9 @@ async fn main() -> Result<()> {
         None => panic!("No .torrent file selected"),
     }
     let peer_id = generate_peer_id();
-    let torrent = Torrent::new(bencode_parser::decode(&bytes)?, &peer_id, "6881");
+    let torrent = Torrent::new(bencode_parser::decode(&bytes)?, &peer_id, "6881")?;
 
-    let info_bencode = Arc::new(torrent.get_info_bencode());
+    let info_bencode = Arc::new(torrent.get_info_bencode()?);
 
     let hashed_torrent_pieces: Arc<Vec<String>> = Arc::new(torrent.get_piece_hashes()?);
     let bytes_obtained_pieces = Arc::new(Mutex::new(vec![vec![]; hashed_torrent_pieces.len()]));

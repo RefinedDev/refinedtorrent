@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use std::collections::BTreeMap;
 
 #[derive(Debug)]
@@ -115,19 +115,19 @@ fn decode_list<'a>(mut rest: &'a [u8]) -> Result<(Vec<BencodeType<'a>>, Option<&
             list.push(BencodeType::Integer(number));
         } else if first_char == &b'l' {
             // list
-            rest = rest.strip_prefix(b"l").unwrap();
+            rest = rest.strip_prefix(b"l").context("slice did not begin with 'l'")?;
             let recursed = decode_list(rest)?;
             list.push(BencodeType::List(recursed.0));
             rest = recursed.1.unwrap()
         } else if first_char == &b'd' {
             // dict
-            rest = rest.strip_prefix(b"d").unwrap();
+            rest = rest.strip_prefix(b"d").context("slice did not begin with 'd'")?;
             let recursed = decode_dict(rest)?;
             list.push(BencodeType::Dict(recursed.0));
             rest = recursed.1.unwrap()
         } else if first_char == &b'e' {
             // only gonna happen during recursion or if the bencode is faulty
-            rest = rest.strip_prefix(b"e").unwrap();
+            rest = rest.strip_prefix(b"e").context("slice did not begin with 'e'")?;
             return Ok((list, Some(rest)));
         }
     }
@@ -155,7 +155,7 @@ fn decode_dict<'a>(
             rest = &rest[colon_idx + strlen + 1..];
             // Check if there exists a dictionary key; if yes then this string is a Value
             if key.is_none() {
-                key = Some(String::from_utf8(string.to_vec()).unwrap())
+                key = Some(String::from_utf8(string.to_vec()).context("key is not valid utf-8")?)
             } else {
                 dict.insert(key.take().unwrap(), BencodeType::String(string));
             }
@@ -166,19 +166,19 @@ fn decode_dict<'a>(
             dict.insert(key.take().unwrap(), BencodeType::Integer(number));
         } else if first_char == &b'l' {
             // list
-            rest = rest.strip_prefix(b"l").unwrap();
+            rest = rest.strip_prefix(b"l").context("slice did not begin with 'l'")?;
             let recursed = decode_list(rest)?;
             dict.insert(key.take().unwrap(), BencodeType::List(recursed.0));
             rest = recursed.1.unwrap()
         } else if first_char == &b'd' {
             // dict
-            rest = rest.strip_prefix(b"d").unwrap();
+            rest = rest.strip_prefix(b"d").context("slice did not begin with 'd'")?;
             let recursed = decode_dict(rest)?;
             dict.insert(key.take().unwrap(), BencodeType::Dict(recursed.0));
             rest = recursed.1.unwrap()
         } else if first_char == &b'e' {
             // only gonna during recursion or if the bencode is faulty
-            rest = rest.strip_prefix(b"e").unwrap();
+            rest = rest.strip_prefix(b"e").context("slice did not begin with 'e'")?;
             return Ok((dict, Some(rest)));
         }
     }
