@@ -87,6 +87,9 @@ impl<'a> Peer<'a> {
                     tokio::select! {
                         result = stream.read_exact(&mut length_bytes) => {
                             result?;
+                            if u32::from_be_bytes(length_bytes) == 0 {
+                                continue; // keep-alive
+                            }
                             stream.read_exact(&mut message_id).await?;
                         }
                         _ = disconnect_event.notified() => {
@@ -107,7 +110,15 @@ impl<'a> Peer<'a> {
                         [1] => choked = false,
                         [2] => (), // peer interested but i aint seeding 👻
                         [3] => (), // peer not interested 👻
-                        [4] => {}  // TODO: the peer has a piece we want now but didnt have earlier
+                        [4] => {
+                            let mut payload = [0u8; 4];
+                            stream.read_exact(&mut payload).await?;
+                            let piece_index = u32::from_be_bytes(payload) as usize;
+                            let bit_index = piece_index/8;
+                            let bit_offset = piece_index%8;
+                            bitfield[bit_index] |= 1 << (7-bit_offset);
+                            info!("{} obtained piece index {}", ip, piece_index);
+                        }
                         [5] => (), // bitfield (we already have it)
                         [6] => (), // peer request but i aint seeding 👻
                         [7] => {
@@ -263,7 +274,7 @@ impl<'a> Peer<'a> {
         stream: &mut TcpStream,
         info_hash: &[u8],
         peer_id: &str,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<()> {
         let mut h1 = [0u8; 68];
         h1[0] = 19;
         h1[1..20].copy_from_slice(b"BitTorrent protocol");
