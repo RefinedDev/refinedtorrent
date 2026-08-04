@@ -14,7 +14,7 @@ Built as a learning project to understand how BitTorrent actually works under th
   - Automatic requeueing of a piece if a peer disconnects or sends bad data mid-download, so no peer failure stalls the download
 - Live terminal progress bar
 
-## What it does not do (by design)
+## What it does not do (I might implement these later)
 
 This was a learning project, not a full BitTorrent client:
 
